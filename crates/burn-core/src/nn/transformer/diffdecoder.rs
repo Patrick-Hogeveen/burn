@@ -11,173 +11,19 @@ use crate::{
 use crate::{
     config::Config,
     nn::{
-        attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
-        Dropout, DropoutConfig, LayerNorm, LayerNormConfig,
+        attention::{MhaInput, DiffMhaInput, MultiHeadAttention, MultiHeadAttentionConfig, DiffMultiHeadAttention, DiffMultiHeadAttentionConfig},
+        Dropout, DropoutConfig, LayerNorm, LayerNormConfig, transformer::decoder::*,
     },
     tensor::{backend::Backend, Tensor},
 };
 
-/// Configuration to create a [Transformer Decoder](TransformerDecoder) layer using the [init function](TransformerDecoderConfig::init).
-#[derive(Config)]
-pub struct TransformerDecoderConfig {
-    /// The size of the model.
-    pub d_model: usize,
-    /// The size of the position-wise feed-forward network.
-    pub d_ff: usize,
-    /// The number of attention heads.
-    pub n_heads: usize,
-    /// The number of layers.
-    pub n_layers: usize,
-    /// The dropout rate. Default: 0.1
-    #[config(default = 0.1)]
-    pub dropout: f64,
-    /// Layer norm will be applied first instead of after the other modules.
-    #[config(default = false)]
-    pub norm_first: bool,
-    /// Use "quiet softmax" instead of regular softmax.
-    ///
-    /// - Usage may improve performance by allowing attention heads to deposit no information (if the sequence contains no information relevant to that head).
-    /// - Usage may reduce the entropy of weights in the model, enhancing quantization and compression.
-    ///
-    /// Reference: <https://www.evanmiller.org/attention-is-off-by-one.html>
-    #[config(default = false)]
-    pub quiet_softmax: bool,
-    /// The type of function used to initialize neural network parameters
-    #[config(
-        default = "Initializer::KaimingUniform{gain:1.0/num_traits::Float::sqrt(3.0), fan_out_only:false}"
-    )]
-    pub initializer: Initializer,
-}
 
-/// The transformer decoder module as describe in the paper [Attention Is All You Need](https://arxiv.org/abs/1706.03762).
-///
-/// # Params
-///
-/// - layers: transformer decoder layers with `d_model` input and output features.
-///
-/// Should be created using [TransformerDecoderConfig]
+
+
 #[derive(Module, Debug)]
-#[module(custom_display)]
-pub struct TransformerDecoder<B: Backend> {
-    /// Transformer decoder layers.
-    pub layers: Vec<TransformerDecoderLayer<B>>,
-
-    /// The size of the model.
-    pub d_model: usize,
-
-    /// The size of the position-wise feed-forward network.
-    pub d_ff: usize,
-
-    /// The number of attention heads.
-    pub n_heads: usize,
-
-    /// The number of layers.
-    pub n_layers: usize,
-
-    /// The dropout rate. Default: 0.1
-    pub dropout: f64,
-
-    /// Layer norm will be applied first instead of after the other modules.
-    pub norm_first: bool,
-
-    /// Use "quiet softmax" instead of regular softmax.
-    pub quiet_softmax: bool,
-}
-
-impl<B: Backend> ModuleDisplay for TransformerDecoder<B> {
-    fn custom_settings(&self) -> Option<DisplaySettings> {
-        DisplaySettings::new()
-            .with_new_line_after_attribute(false)
-            .optional()
-    }
-
-    fn custom_content(&self, content: Content) -> Option<Content> {
-        content
-            .add("d_model", &self.d_model)
-            .add("d_ff", &self.d_ff)
-            .add("n_heads", &self.n_heads)
-            .add("n_layers", &self.n_layers)
-            .add("dropout", &self.dropout)
-            .add("norm_first", &self.norm_first)
-            .add("quiet_softmax", &self.quiet_softmax)
-            .optional()
-    }
-}
-
-impl TransformerDecoderConfig {
-    /// Initialize a new [Transformer Decoder](TransformerDecoder) module.
-    pub fn init<B: Backend>(&self, device: &B::Device) -> TransformerDecoder<B> {
-        let layers = (0..self.n_layers)
-            .map(|_| TransformerDecoderLayer::new(self, device))
-            .collect::<Vec<_>>();
-
-        TransformerDecoder {
-            layers,
-            d_model: self.d_model,
-            d_ff: self.d_ff,
-            n_heads: self.n_heads,
-            n_layers: self.n_layers,
-            dropout: self.dropout,
-            norm_first: self.norm_first,
-            quiet_softmax: self.quiet_softmax,
-        }
-    }
-}
-
-/// [Transformer Decoder](TransformerDecoder) forward pass input argument.
-#[derive(Debug)]
-pub struct TransformerDecoderInput<B: Backend> {
-    pub target: Tensor<B, 3>,
-    pub target_mask_pad: Option<Tensor<B, 2, Bool>>,
-    pub target_mask_attn: Option<Tensor<B, 3, Bool>>,
-    pub memory: Tensor<B, 3>,
-    pub memory_mask_pad: Option<Tensor<B, 2, Bool>>,
-    pub memory_mask_attn: Option<Tensor<B, 3, Bool>>,
-}
-
-impl<B: Backend> TransformerDecoderInput<B> {
-    /// Create a [transformer decoder](TransformerDecoder) input argument.
-    pub fn new(target: Tensor<B, 3>, memory: Tensor<B, 3>) -> Self {
-        Self {
-            target,
-            target_mask_pad: None,
-            target_mask_attn: None,
-            memory,
-            memory_mask_pad: None,
-            memory_mask_attn: None,
-        }
-    }
-
-    /// Register the memory padding mask.
-    pub fn memory_mask_pad(mut self, mask_pad: Tensor<B, 2, Bool>) -> Self {
-        self.memory_mask_pad = Some(mask_pad);
-        self
-    }
-
-    /// Register the memory attention mask.
-    pub fn memory_mask_attn(mut self, mask_attn: Tensor<B, 3, Bool>) -> Self {
-        self.memory_mask_attn = Some(mask_attn);
-        self
-    }
-
-    /// Register the target padding mask.
-    pub fn target_mask_pad(mut self, mask_pad: Tensor<B, 2, Bool>) -> Self {
-        self.target_mask_pad = Some(mask_pad);
-        self
-    }
-
-    /// Register the target attention mask.
-    pub fn target_mask_attn(mut self, mask_attn: Tensor<B, 3, Bool>) -> Self {
-        self.target_mask_attn = Some(mask_attn);
-        self
-    }
-}
-
-/// [Transformer Decoder](TransformerDecoder) layer module.
-#[derive(Module, Debug)]
-pub struct TransformerDecoderLayer<B: Backend> {
-    cross_attn: MultiHeadAttention<B>,
-    self_attn: MultiHeadAttention<B>,
+pub struct DiffTransformerDecoderLayer<B: Backend> {
+    cross_attn: DiffMultiHeadAttention<B>,
+    self_attn: DiffMultiHeadAttention<B>,
     pwff: PositionWiseFeedForward<B>,
     norm_1: LayerNorm<B>,
     norm_2: LayerNorm<B>,
@@ -186,54 +32,15 @@ pub struct TransformerDecoderLayer<B: Backend> {
     norm_first: bool,
 }
 
-pub struct TransformerDecoderLayerAutoregressiveCache<B: Backend> {
-    pub cross_attn: MhaCache<B>,
-    pub self_attn: MhaCache<B>,
-    pub pwff: TensorCache<B, 3>,
-    pub norm_1: TensorCache<B, 3>,
-    pub norm_2: TensorCache<B, 3>,
-    pub norm_3: TensorCache<B, 3>,
-}
-
-impl<B: Backend> TransformerDecoderLayerAutoregressiveCache<B> {
-    fn empty() -> Self {
-        Self {
-            cross_attn: MhaCache::autoregressive_cross_attention(),
-            self_attn: MhaCache::autoregressive(),
-            pwff: TensorCache::empty(),
-            norm_1: TensorCache::empty(),
-            norm_2: TensorCache::empty(),
-            norm_3: TensorCache::empty(),
-        }
-    }
-}
-
-/// Autoregressive cache for the [Transformer Decoder](TransformerDecoder) layer.
-///
-/// To be used during inference when decoding tokens.
-pub struct TransformerDecoderAutoregressiveCache<B: Backend> {
-    layers: Vec<TransformerDecoderLayerAutoregressiveCache<B>>,
-}
-
-impl<B: Backend> TransformerDecoderAutoregressiveCache<B> {
-    fn empty(num_layers: usize) -> Self {
-        Self {
-            layers: (0..num_layers)
-                .map(|_| TransformerDecoderLayerAutoregressiveCache::empty())
-                .collect(),
-        }
-    }
-}
-
-impl<B: Backend> TransformerDecoderLayer<B> {
+impl<B: Backend> DiffTransformerDecoderLayer<B> {
     fn new(config: &TransformerDecoderConfig, device: &B::Device) -> Self {
-        let self_attn = MultiHeadAttentionConfig::new(config.d_model, config.n_heads)
+        let self_attn = DiffMultiHeadAttentionConfig::new(config.d_model, config.n_heads)
             .with_initializer(config.initializer.clone())
             .with_dropout(config.dropout)
             .with_quiet_softmax(config.quiet_softmax)
             .init(device);
 
-        let cross_attn = MultiHeadAttentionConfig::new(config.d_model, config.n_heads)
+        let cross_attn = DiffMultiHeadAttentionConfig::new(config.d_model, config.n_heads)
             .with_initializer(config.initializer.clone())
             .with_dropout(config.dropout)
             .with_quiet_softmax(config.quiet_softmax)
@@ -270,7 +77,7 @@ impl<B: Backend> TransformerDecoderLayer<B> {
         }
 
         // Self attention.
-        let mut self_attn_input = MhaInput::self_attn(residual_path);
+        let mut self_attn_input = DiffMhaInput::self_attn(residual_path, 0.5);
         if let Some(mask_pad) = &input.target_mask_pad {
             self_attn_input = self_attn_input.mask_pad(mask_pad.clone());
         }
@@ -293,7 +100,7 @@ impl<B: Backend> TransformerDecoderLayer<B> {
 
         // Cross attention.
         let mut cross_attn_input =
-            MhaInput::new(residual_path, input.memory.clone(), input.memory.clone());
+            DiffMhaInput::new(residual_path, input.memory.clone(), input.memory.clone(), 0.5);
         if let Some(mask_pad) = &input.memory_mask_pad {
             cross_attn_input = cross_attn_input.mask_pad(mask_pad.clone());
         }
@@ -345,7 +152,7 @@ impl<B: Backend> TransformerDecoderLayer<B> {
         }
 
         // Self attention.
-        let mut self_attn_input = MhaInput::self_attn(residual_path);
+        let mut self_attn_input = DiffMhaInput::self_attn(residual_path, 0.5);
         if let Some(mask_pad) = &input.target_mask_pad {
             self_attn_input = self_attn_input.mask_pad(mask_pad.clone());
         }
@@ -375,7 +182,7 @@ impl<B: Backend> TransformerDecoderLayer<B> {
 
         // Cross attention.
         let mut cross_attn_input =
-            MhaInput::new(residual_path, input.memory.clone(), input.memory.clone());
+            DiffMhaInput::new(residual_path, input.memory.clone(), input.memory.clone(), 0.5);
         if let Some(mask_pad) = &input.memory_mask_pad {
             cross_attn_input = cross_attn_input.mask_pad(mask_pad.clone());
         }
@@ -419,37 +226,6 @@ impl<B: Backend> TransformerDecoderLayer<B> {
 
         input.target = x;
         input
-    }
-}
-
-impl<B: Backend> TransformerDecoder<B> {
-    /// Applies the forward pass.
-    pub fn forward(&self, mut input: TransformerDecoderInput<B>) -> Tensor<B, 3> {
-        for layer in self.layers.iter() {
-            input = layer.forward(input);
-        }
-
-        input.target
-    }
-
-    /// Applies the forward pass on the input using autoregressive cache.
-    pub fn forward_autoregressive_inference(
-        &self,
-        mut input: TransformerDecoderInput<B>,
-        cache: &mut TransformerDecoderAutoregressiveCache<B>,
-    ) -> Tensor<B, 3> {
-        for i in 0..self.layers.len() {
-            let layer = self.layers.get(i).unwrap();
-            let cache = cache.layers.get_mut(i).unwrap();
-
-            input = layer.forward_autoregressive_inference(input, cache);
-        }
-
-        input.target
-    }
-    /// Create an empty autoregressive cache.
-    pub fn new_autoregressive_cache(&self) -> TransformerDecoderAutoregressiveCache<B> {
-        TransformerDecoderAutoregressiveCache::empty(self.layers.len())
     }
 }
 

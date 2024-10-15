@@ -1,0 +1,8 @@
+[package]
+name = "difftransformer-test"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[dependencies]
